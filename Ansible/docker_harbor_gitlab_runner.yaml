@@ -1,0 +1,123 @@
+# Installs docker, harbor, gitlab runner. Configure hosts properly.
+- name: Install Docker and Friends
+  # hosts: bookworm
+  hosts: raf-builder
+  become: true
+  tasks:
+    - name: Install packages that allow apt to be used over HTTPS
+      apt:
+        name: "{{ packages }}"
+        state: present
+        update_cache: true
+      vars:
+        packages:
+        - ca-certificates
+        - curl
+        - gnupg
+        - git
+
+    - name: Add an apt signing key for Docker
+      apt_key:
+        url: https://download.docker.com/linux/debian/gpg
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Add apt repository for stable version
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/debian {{ ansible_distribution_release }} stable"
+        state: present
+      when: ansible_architecture == "x86_64" and ansible_os_family == "Debian"
+
+    - name: Install docker stuff
+      apt: 
+        name: "{{ packages }}"
+        state: present
+        update_cache: yes
+      vars:
+        packages:
+        - docker-ce 
+        - docker-ce-cli 
+        - containerd.io 
+        - docker-buildx-plugin 
+        - docker-compose-plugin
+
+    - name: Add docker permissions to user
+      ansible.builtin.user:
+        name: user
+        shell: /bin/bash
+        groups: docker
+        append: yes
+        password: "$6$mysecretsalt$QZASCxPDSTp98b72bAyHAh.qCSK/B8R61rMea.UBU7x8tXu5OBR86QNHi8nsPNqMz4tuI042cR0fOot4hfKht/"
+
+# install harbor
+    - name: Download harbor
+      ansible.builtin.get_url:
+        url: https://github.com/goharbor/harbor/releases/download/v2.8.2/harbor-offline-installer-v2.8.2.tgz
+        dest: /home/user/harbor-offline-installer-v2.8.2.tgz
+
+    # - name: create directory
+    #   ansible.builtin.file:
+    #     path: /home/user/harbor
+    #     owner: user
+    #     group: user
+    #     state: directory
+
+    - name: Extract harbor
+      ansible.builtin.unarchive:
+        remote_src: yes
+        src: /home/user/harbor-offline-installer-v2.8.2.tgz
+        dest: /home/user/
+        owner: user
+        group: user
+
+    - name: Copy config file 
+      ansible.builtin.copy:
+        remote_src: true
+        src: /home/user/harbor/harbor.yml.tmpl
+        dest: /home/user/harbor/harbor.yml
+        owner: user
+        group: user
+
+    - name: Set Hostname for harbor
+      tags: config
+      ansible.builtin.lineinfile:
+        path: /home/user/harbor/harbor.yml
+        regexp: '^hostname: reg.mydomain.com'
+        line: 'hostname: ecr.local.com'    
+
+    - name: Set Hostname for harbor
+      tags: config
+      ansible.builtin.lineinfile:
+        path: /home/user/harbor/harbor.yml
+        regexp: '^harbor_admin_password.*'
+        line: 'harbor_admin_password: 11d60W8'    
+
+    - name: Set Hostname for harbor
+      tags: config
+      ansible.builtin.lineinfile:
+        path: /home/user/harbor/harbor.yml
+        regexp: '  password: root123'
+        line: '  password: 11d60W8'
+
+    - name: Comment https
+      tags: config
+      ansible.builtin.command: sed -i '12,17s/^/# /' /home/user/harbor/harbor.yml
+    
+    - name: Install harbor
+      tags: install
+      become_user: root
+      ansible.builtin.command: /home/user/harbor/install.sh
+
+    # Install gitlab runner
+    - name: Setup gitlab runner
+      tags: install
+      become_user: root
+      ansible.builtin.shell: "curl -L 'https://packages.gitlab.com/install/repositories/runner/gitlab-runner/script.deb.sh' | sudo bash"
+
+    - name: Install gitlab runner
+      tags: install
+      become_user: root
+      apt:
+        name: "gitlab-runner"
+        state: present
+        update_cache: yes
